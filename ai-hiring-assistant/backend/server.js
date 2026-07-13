@@ -218,6 +218,7 @@ app.post("/analyze", verifyToken, async (req, res) => {
 
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
+      temperature: 0.0,
       messages: [
         {
           role: "system",
