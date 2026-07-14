@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import multer from "multer";
 import fs from "fs";
+import crypto from "crypto";
 import Groq from "groq-sdk";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -201,7 +202,7 @@ app.post("/upload", verifyToken, upload.single("resume"), async (req, res) => {
   }
 });
 
-// ✅ Analyze Resume using Groq
+// ✅ Analyze Resume using Groq (with Caching)
 app.post("/analyze", verifyToken, async (req, res) => {
   try {
     console.log("BODY RECEIVED:", req.body);
@@ -216,6 +217,24 @@ app.post("/analyze", verifyToken, async (req, res) => {
       return res.status(500).json({ error: "Groq API key missing" });
     }
 
+    // 1. Create a hash of the resume text
+    const resumeHash = crypto.createHash('md5').update(resumeText).digest('hex');
+    console.log("RESUME HASH:", resumeHash);
+
+    // 2. Check cache first
+    const [cached] = await pool.query(
+      "SELECT result FROM analysis_cache WHERE user_id = ? AND resume_hash = ? AND job_description = ?",
+      [req.userId, resumeHash, jobDescription || null]
+    );
+
+    if (cached.length > 0) {
+      console.log("✅ CACHE HIT: Returning cached result");
+      res.json({ result: cached[0].result, cached: true, cacheMessage: "Result from cache (same resume analyzed before)" });
+      return;
+    }
+
+    // 3. Cache miss - call Groq
+    console.log("❌ CACHE MISS: Calling Groq API");
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       temperature: 0.0,
@@ -248,13 +267,24 @@ Provide:
 
     const result = completion.choices[0]?.message?.content;
 
-    // Save to history
+    // 4. Store in cache
+    try {
+      await pool.query(
+        "INSERT INTO analysis_cache (user_id, resume_hash, job_description, result) VALUES (?, ?, ?, ?)",
+        [req.userId, resumeHash, jobDescription || null, result]
+      );
+      console.log("✅ Result cached for future use");
+    } catch (cacheErr) {
+      console.error("Cache storage error (non-critical):", cacheErr.message);
+    }
+
+    // 5. Save to history
     await pool.query(
       "INSERT INTO history (user_id, type, job_description, result_content, resume_text_sample) VALUES (?, ?, ?, ?, ?)",
       [req.userId, 'analysis', jobDescription, result, resumeText.substring(0, 500)]
     );
 
-    res.json({ result });
+    res.json({ result, cached: false, cacheMessage: "Fresh analysis from Groq" });
   } catch (err) {
     console.error("ANALYZE ERROR:", err);
     res.status(500).json({ error: "Analysis failed" });

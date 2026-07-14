@@ -43,8 +43,22 @@ export const initDb = async () => {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS analysis_cache (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        resume_hash VARCHAR(32) NOT NULL,
+        job_description TEXT,
+        result LONGTEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY (user_id, resume_hash, job_description(100)),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        INDEX idx_user_hash (user_id, resume_hash)
+      )
+    `);
     
-    console.log("✅ Users table ensured.");
+    console.log("✅ Users and cache tables ensured.");
     connection.release();
   } catch (err) {
     console.error("❌ Failed to connect to MySQL database:", err);
